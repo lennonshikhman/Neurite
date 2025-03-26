@@ -18,7 +18,7 @@
 
 // Neurite: A single-header, scikit-learn–like C++ machine learning library
 
-namespace sklearn {
+namespace neurite {
 
 //////////////////////////////
 // Linear Models
@@ -2005,6 +2005,6 @@ namespace model_selection {
 
 } // namespace model_selection
 
-} // namespace sklearn
+} // namespace neurite
 
 #endif // NEURITE_HPP
