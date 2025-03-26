@@ -41,7 +41,7 @@ Neurite uses CMake for building tests and examples. A sample `CMakeLists.txt` is
 1. **Clone the repository:**
 
    ```bash
-   git clone https://github.com/yourusername/Neurite.git
+   git clone https://github.com/lennonshikhman/Neurite.git
    cd Neurite
    ```
 
