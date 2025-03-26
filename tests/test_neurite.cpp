@@ -15,14 +15,14 @@ int main() {
     Eigen::VectorXd y_lr(5);
     y_lr << 3, 5, 7, 9, 11;
 
-    sklearn::linear_model::LinearRegression lr;
+    neurite::linear_model::LinearRegression lr;
     lr.fit(X_lr, y_lr);
     Eigen::VectorXd preds_lr = lr.predict(X_lr);
     std::cout << "LinearRegression Predictions:\n" << preds_lr << "\n\n";
 
     // --- Test 2: Standard Scaler ---
     std::cout << "Testing StandardScaler..." << std::endl;
-    sklearn::preprocessing::StandardScaler scaler;
+    neurite::preprocessing::StandardScaler scaler;
     scaler.fit(X_lr);
     Eigen::MatrixXd X_scaled = scaler.transform(X_lr);
     std::cout << "Original X:\n" << X_lr << "\n";
@@ -38,7 +38,7 @@ int main() {
                  10, 10,
                  10, 11,
                  11, 10;
-    sklearn::cluster::KMeans kmeans(2, 100);
+    neurite::cluster::KMeans kmeans(2, 100);
     kmeans.fit(X_cluster);
     Eigen::VectorXi cluster_labels = kmeans.predict(X_cluster);
     std::cout << "KMeans Cluster Labels:\n" << cluster_labels << "\n\n";
@@ -46,9 +46,9 @@ int main() {
     // --- Test 4: Pipeline Example ---
     std::cout << "Testing Pipeline..." << std::endl;
     // For demonstration, chain StandardScaler and LinearRegression in a pipeline
-    sklearn::pipeline::Pipeline pipe;
-    pipe.add_transformer("scaler", sklearn::preprocessing::StandardScaler());
-    pipe.add_estimator("lr", sklearn::linear_model::LinearRegression());
+    neurite::pipeline::Pipeline pipe;
+    pipe.add_transformer("scaler", neurite::preprocessing::StandardScaler());
+    pipe.add_estimator("lr", neurite::linear_model::LinearRegression());
     pipe.fit(X_lr, y_lr);
     Eigen::VectorXd pipe_preds = pipe.predict(X_lr);
     std::cout << "Pipeline Predictions:\n" << pipe_preds << "\n";
