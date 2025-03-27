@@ -1,6 +1,6 @@
 # Neurite
 
-Neurite is a single-header, C++ machine learning library inspired by Python’s scikit-learn. It provides a wide range of ML algorithms, preprocessing tools, pipeline utilities, and model selection functions—all organized under a clean, consistent API designed for high-performance computing. Neurite leverages Eigen for fast linear algebra operations and is designed to be easily integrated into any C++ project.
+Neurite is a C++ machine learning library inspired by Python’s scikit-learn. It provides a wide range of ML algorithms, preprocessing tools, pipeline utilities, and model selection functions—all organized under a clean, consistent API designed for high-performance computing. Neurite leverages Eigen for fast linear algebra operations and is designed to be easily integrated into any C++ project.
 
 ## Features
 
