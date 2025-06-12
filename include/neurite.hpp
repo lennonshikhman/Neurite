@@ -25,6 +25,14 @@ namespace neurite {
 //////////////////////////////
 namespace linear_model {
 
+  inline double soft_threshold(double rho, double lambda) {
+    if (rho > lambda)
+      return rho - lambda;
+    if (rho < -lambda)
+      return rho + lambda;
+    return 0.0;
+  }
+
   /** \brief Ordinary Least Squares Linear Regression.
    *  Fits model y = Xw + b minimizing the squared error.
    */
@@ -106,10 +114,31 @@ namespace linear_model {
       : alpha(alpha), fit_intercept(fit_intercept), intercept_(0.0), max_iter(max_iter) {}
 
     void fit(const Eigen::MatrixXd &X, const Eigen::VectorXd &y) {
-      // Pseudocode: initialize coefficients to zero and update coordinate-wise
-      coef_ = Eigen::VectorXd::Zero(X.cols());
-      intercept_ = fit_intercept ? y.mean() : 0.0;
-      // Coordinate descent updates would be implemented here.
+      int n_samples = X.rows();
+      int n_features = X.cols();
+      Eigen::MatrixXd Xc = X;
+      Eigen::VectorXd yc = y;
+      Eigen::RowVectorXd X_mean = Eigen::RowVectorXd::Zero(n_features);
+      double y_mean = 0.0;
+      if (fit_intercept) {
+        X_mean = X.colwise().mean();
+        y_mean = y.mean();
+        Xc.rowwise() -= X_mean;
+        yc.array() -= y_mean;
+      }
+      coef_ = Eigen::VectorXd::Zero(n_features);
+      Eigen::VectorXd X_sq = Xc.array().square().colwise().sum();
+      for (int iter = 0; iter < max_iter; ++iter) {
+        for (int j = 0; j < n_features; ++j) {
+          double tmp = coef_[j];
+          double rho = Xc.col(j).dot(yc - Xc * coef_ + Xc.col(j) * tmp);
+          coef_[j] = soft_threshold(rho, alpha * n_samples) / X_sq[j];
+        }
+      }
+      intercept_ = 0.0;
+      if (fit_intercept) {
+        intercept_ = y_mean - (X_mean * coef_).value();
+      }
     }
 
     Eigen::VectorXd predict(const Eigen::MatrixXd &X) const {
@@ -135,9 +164,32 @@ namespace linear_model {
       : alpha(alpha), l1_ratio(l1_ratio), fit_intercept(fit_intercept), intercept_(0.0), max_iter(max_iter) {}
 
     void fit(const Eigen::MatrixXd &X, const Eigen::VectorXd &y) {
-      coef_ = Eigen::VectorXd::Zero(X.cols());
-      intercept_ = fit_intercept ? y.mean() : 0.0;
-      // Pseudocode for combined coordinate descent update.
+      int n_samples = X.rows();
+      int n_features = X.cols();
+      Eigen::MatrixXd Xc = X;
+      Eigen::VectorXd yc = y;
+      Eigen::RowVectorXd X_mean = Eigen::RowVectorXd::Zero(n_features);
+      double y_mean = 0.0;
+      if (fit_intercept) {
+        X_mean = X.colwise().mean();
+        y_mean = y.mean();
+        Xc.rowwise() -= X_mean;
+        yc.array() -= y_mean;
+      }
+      coef_ = Eigen::VectorXd::Zero(n_features);
+      Eigen::VectorXd X_sq = Xc.array().square().colwise().sum();
+      for (int iter = 0; iter < max_iter; ++iter) {
+        for (int j = 0; j < n_features; ++j) {
+          double tmp = coef_[j];
+          double rho = Xc.col(j).dot(yc - Xc * coef_ + Xc.col(j) * tmp);
+          double z = X_sq[j] + alpha * (1.0 - l1_ratio) * n_samples;
+          coef_[j] = soft_threshold(rho, alpha * l1_ratio * n_samples) / z;
+        }
+      }
+      intercept_ = 0.0;
+      if (fit_intercept) {
+        intercept_ = y_mean - (X_mean * coef_).value();
+      }
     }
 
     Eigen::VectorXd predict(const Eigen::MatrixXd &X) const {
@@ -173,9 +225,27 @@ namespace linear_model {
       std::sort(classes_.begin(), classes_.end());
       int n_classes = classes_.size();
       int n_features = X.cols();
+      int n_samples = X.rows();
       coef_ = Eigen::MatrixXd::Zero(n_classes, n_features);
       intercept_ = Eigen::VectorXd::Zero(n_classes);
-      // Pseudocode: implement solver (e.g., gradient descent) to optimize log-likelihood.
+      Eigen::MatrixXd Y = Eigen::MatrixXd::Zero(n_samples, n_classes);
+      for (int i = 0; i < n_samples; ++i) {
+        int idx = std::distance(classes_.begin(), std::find(classes_.begin(), classes_.end(), static_cast<int>(std::round(y[i]))));
+        Y(i, idx) = 1.0;
+      }
+      double lr = 0.1;
+      for (int it = 0; it < max_iter; ++it) {
+        Eigen::MatrixXd scores = (X * coef_.transpose()).rowwise() + intercept_.transpose();
+        Eigen::MatrixXd probs = scores;
+        for (int i = 0; i < probs.rows(); ++i) {
+          double m = probs.row(i).maxCoeff();
+          Eigen::VectorXd exps = (probs.row(i).array() - m).exp();
+          probs.row(i) = exps / exps.sum();
+        }
+        Eigen::MatrixXd diff = probs - Y;
+        coef_ -= lr * (diff.transpose() * X) / n_samples;
+        intercept_ -= lr * diff.colwise().mean();
+      }
     }
 
     Eigen::VectorXi predict(const Eigen::MatrixXd &X) const {
@@ -236,22 +306,31 @@ namespace svm {
       : C(C), kernel(kernel), gamma(gamma), degree(degree), coef0(coef0), rho_(0.0) {}
 
     void fit(const Eigen::MatrixXd &X, const Eigen::VectorXd &y) {
-      // Placeholder: call to external SVM solver.
-      support_vectors_ = X; // Not an actual implementation.
-      dual_coeff_ = Eigen::VectorXd::Ones(X.rows());
+      int n_samples = X.rows();
+      int n_features = X.cols();
+      dual_coeff_ = Eigen::VectorXd::Zero(n_features); // using as weight vector
       rho_ = 0.0;
+      double lr = 0.01;
+      for (int it = 0; it < 1000; ++it) {
+        for (int i = 0; i < n_samples; ++i) {
+          double yi = y[i] > 0 ? 1.0 : -1.0;
+          double margin = yi * (X.row(i).dot(dual_coeff_) + rho_);
+          if (margin < 1) {
+            dual_coeff_ = (1 - lr) * dual_coeff_ + lr * C * yi * X.row(i).transpose();
+            rho_ += lr * C * yi;
+          } else {
+            dual_coeff_ = (1 - lr) * dual_coeff_;
+          }
+        }
+      }
+      support_vectors_ = X;
     }
 
     Eigen::VectorXi predict(const Eigen::MatrixXd &X) const {
       Eigen::VectorXi labels(X.rows());
       for (int i = 0; i < X.rows(); ++i) {
-        double decision = 0.0;
-        for (int j = 0; j < support_vectors_.rows(); ++j) {
-          double kernel_val = support_vectors_.row(j).dot(X.row(i).transpose());
-          decision += dual_coeff_[j] * kernel_val;
-        }
-        decision += rho_;
-        labels[i] = (decision >= 0 ? 1 : -1);
+        double decision = X.row(i).dot(dual_coeff_) + rho_;
+        labels[i] = decision >= 0 ? 1 : -1;
       }
       return labels;
     }
@@ -360,18 +439,32 @@ namespace svm {
     Eigen::MatrixXd support_vectors_;
     Eigen::VectorXd dual_coeff_;
     double rho_;
+    Eigen::RowVectorXd mean_;
+    double radius_;
 
     OneClassSVM(double nu = 0.5, std::string kernel = "rbf", double gamma = 0.1)
       : nu(nu), kernel(kernel), gamma(gamma), rho_(0.0) {}
 
     void fit(const Eigen::MatrixXd &X) {
       support_vectors_ = X;
-      dual_coeff_ = Eigen::VectorXd::Ones(X.rows());
-      rho_ = 0.0;
+      mean_ = X.colwise().mean();
+      Eigen::VectorXd dists(X.rows());
+      for (int i = 0; i < X.rows(); ++i)
+        dists[i] = (X.row(i) - mean_).norm();
+      std::vector<double> vd(dists.data(), dists.data() + dists.size());
+      size_t k = static_cast<size_t>((1.0 - nu) * vd.size());
+      if (k >= vd.size()) k = vd.size() - 1;
+      std::nth_element(vd.begin(), vd.begin() + k, vd.end());
+      radius_ = vd[k];
+      rho_ = radius_;
     }
 
     Eigen::VectorXi predict(const Eigen::MatrixXd &X) const {
-      Eigen::VectorXi labels = Eigen::VectorXi::Ones(X.rows());
+      Eigen::VectorXi labels(X.rows());
+      for (int i = 0; i < X.rows(); ++i) {
+        double dist = (X.row(i) - mean_).norm();
+        labels[i] = dist <= radius_ ? 1 : -1;
+      }
       return labels;
     }
   };
@@ -1474,7 +1567,64 @@ namespace manifold {
 
     Eigen::MatrixXd fit_transform(const Eigen::MatrixXd &X) {
       int n = X.rows();
-      Eigen::MatrixXd Y = Eigen::MatrixXd::Random(n, n_components);
+      Eigen::MatrixXd dist = Eigen::MatrixXd::Zero(n, n);
+      for (int i = 0; i < n; ++i)
+        for (int j = i + 1; j < n; ++j) {
+          double d = (X.row(i) - X.row(j)).squaredNorm();
+          dist(i, j) = dist(j, i) = std::sqrt(d);
+        }
+
+      Eigen::MatrixXd P = Eigen::MatrixXd::Zero(n, n);
+      double logU = std::log(perplexity);
+      for (int i = 0; i < n; ++i) {
+        double beta = 1.0;
+        double betamin = -std::numeric_limits<double>::infinity();
+        double betamax = std::numeric_limits<double>::infinity();
+        Eigen::VectorXd Di = dist.row(i).transpose();
+        Eigen::VectorXd Pi(n);
+        for (int iter = 0; iter < 50; ++iter) {
+          Eigen::VectorXd Pj = (-Di.array().square() * beta).exp();
+          Pj[i] = 0.0;
+          double sumP = Pj.sum();
+          if (sumP == 0) {
+            beta *= 2; continue;
+          }
+          Pj /= sumP;
+          double H = - (Pj.array() * (Pj.array() + 1e-12).log()).sum();
+          if (std::fabs(H - logU) < 1e-5) break;
+          if (H > logU) { betamin = beta; beta = std::isinf(betamax) ? beta * 2 : (beta + betamax)/2; }
+          else { betamax = beta; beta = std::isinf(betamin) ? beta / 2 : (beta + betamin)/2; }
+          Pi = Pj;
+        }
+        Pi = (-Di.array().square() * beta).exp();
+        Pi[i] = 0.0;
+        Pi /= Pi.sum();
+        P.row(i) = Pi.transpose();
+      }
+      P = (P + P.transpose()) / (2 * n);
+
+      Eigen::MatrixXd Y = Eigen::MatrixXd::Random(n, n_components) * 1e-4;
+      Eigen::MatrixXd dY = Eigen::MatrixXd::Zero(n, n_components);
+      for (int iter = 0; iter < n_iter; ++iter) {
+        Eigen::MatrixXd Q = Eigen::MatrixXd::Zero(n, n);
+        for (int i = 0; i < n; ++i)
+          for (int j = i + 1; j < n; ++j) {
+            double q = 1.0 / (1.0 + (Y.row(i) - Y.row(j)).squaredNorm());
+            Q(i, j) = Q(j, i) = q;
+          }
+        double sumQ = Q.sum();
+        Q /= sumQ;
+
+        dY.setZero();
+        for (int i = 0; i < n; ++i) {
+          for (int j = 0; j < n; ++j) {
+            if (i == j) continue;
+            double mult = (P(i, j) - Q(i, j)) * Q(i, j) * 4;
+            dY.row(i) += mult * (Y.row(i) - Y.row(j));
+          }
+        }
+        Y += learning_rate * dY;
+      }
       return Y;
     }
   };
@@ -1490,7 +1640,37 @@ namespace manifold {
       : n_components(n_components), n_neighbors(n_neighbors) {}
 
     Eigen::MatrixXd fit_transform(const Eigen::MatrixXd &X) {
-      Eigen::MatrixXd Y = Eigen::MatrixXd::Zero(X.rows(), n_components);
+      int n = X.rows();
+      Eigen::MatrixXd dist = Eigen::MatrixXd::Constant(n, n, std::numeric_limits<double>::infinity());
+      for (int i = 0; i < n; ++i)
+        dist(i, i) = 0.0;
+      for (int i = 0; i < n; ++i) {
+        std::vector<std::pair<double, int>> dists;
+        dists.reserve(n);
+        for (int j = 0; j < n; ++j) {
+          if (i == j) continue;
+          double d = (X.row(i) - X.row(j)).squaredNorm();
+          dists.emplace_back(d, j);
+        }
+        std::nth_element(dists.begin(), dists.begin() + n_neighbors, dists.end());
+        for (int k = 0; k < n_neighbors && k < (int)dists.size(); ++k)
+          dist(i, dists[k].second) = std::sqrt(dists[k].first);
+      }
+      for (int k = 0; k < n; ++k)
+        for (int i = 0; i < n; ++i)
+          for (int j = 0; j < n; ++j)
+            if (dist(i, k) + dist(k, j) < dist(i, j))
+              dist(i, j) = dist(i, k) + dist(k, j);
+
+      Eigen::MatrixXd D2 = dist.array().square().matrix();
+      Eigen::MatrixXd H = Eigen::MatrixXd::Identity(n, n) - Eigen::MatrixXd::Constant(n, n, 1.0 / n);
+      Eigen::MatrixXd K = -0.5 * H * D2 * H;
+      Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> solver(K);
+      Eigen::VectorXd evals = solver.eigenvalues().reverse();
+      Eigen::MatrixXd evecs = solver.eigenvectors().rowwise().reverse();
+      Eigen::MatrixXd Y = Eigen::MatrixXd::Zero(n, n_components);
+      for (int i = 0; i < n_components && i < evals.size(); ++i)
+        Y.col(i) = evecs.col(i) * std::sqrt(std::max(evals[i], 0.0));
       return Y;
     }
   };
@@ -1968,6 +2148,42 @@ namespace model_selection {
     return scores;
   }
 
+  template<typename T, typename = void>
+  struct has_alpha : std::false_type {};
+  template<typename T>
+  struct has_alpha<T, std::void_t<decltype(std::declval<T>().alpha)>> : std::true_type {};
+
+  template<typename T, typename = void>
+  struct has_C : std::false_type {};
+  template<typename T>
+  struct has_C<T, std::void_t<decltype(std::declval<T>().C)>> : std::true_type {};
+
+  template<typename T, typename = void>
+  struct has_l1_ratio : std::false_type {};
+  template<typename T>
+  struct has_l1_ratio<T, std::void_t<decltype(std::declval<T>().l1_ratio)>> : std::true_type {};
+
+  template<typename T, typename = void>
+  struct has_gamma : std::false_type {};
+  template<typename T>
+  struct has_gamma<T, std::void_t<decltype(std::declval<T>().gamma)>> : std::true_type {};
+
+  template<typename Estimator>
+  void set_param(Estimator &model, const std::string &param, double value) {
+    if constexpr (has_alpha<Estimator>::value) {
+      if (param == "alpha") model.alpha = value;
+    }
+    if constexpr (has_C<Estimator>::value) {
+      if (param == "C") model.C = value;
+    }
+    if constexpr (has_l1_ratio<Estimator>::value) {
+      if (param == "l1_ratio") model.l1_ratio = value;
+    }
+    if constexpr (has_gamma<Estimator>::value) {
+      if (param == "gamma") model.gamma = value;
+    }
+  }
+
   template<typename Estimator>
   class GridSearchCV {
   public:
@@ -1988,8 +2204,7 @@ namespace model_selection {
         for (const auto &kv : params) {
           const std::string &param = kv.first;
           double value = kv.second;
-          // Pseudocode: set parameter if estimator supports it.
-          // e.g., if (param == "alpha") model.alpha = value;
+          set_param(model, param, value);
         }
         std::vector<double> scores = cross_val_score(model, X, y, cv);
         double mean_score = std::accumulate(scores.begin(), scores.end(), 0.0) / scores.size();
