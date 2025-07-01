@@ -387,8 +387,25 @@ namespace svm {
       : C(C), fit_intercept(fit_intercept), intercept_(0.0) {}
 
     void fit(const Eigen::MatrixXd &X, const Eigen::VectorXd &y) {
-      coef_ = Eigen::VectorXd::Zero(X.cols());
+      int n_samples = X.rows();
+      int n_features = X.cols();
+      coef_ = Eigen::VectorXd::Zero(n_features);
       intercept_ = 0.0;
+      double lr = 0.01;
+      int epochs = 1000;
+      for (int it = 0; it < epochs; ++it) {
+        for (int i = 0; i < n_samples; ++i) {
+          double yi = y[i] > 0 ? 1.0 : -1.0;
+          double margin = yi * (X.row(i).dot(coef_) + (fit_intercept ? intercept_ : 0.0));
+          if (margin < 1.0) {
+            coef_ = (1 - lr) * coef_ + lr * C * yi * X.row(i).transpose();
+            if (fit_intercept)
+              intercept_ += lr * C * yi;
+          } else {
+            coef_ = (1 - lr) * coef_;
+          }
+        }
+      }
     }
 
     Eigen::VectorXi predict(const Eigen::MatrixXd &X) const {
@@ -417,8 +434,30 @@ namespace svm {
       : C(C), fit_intercept(fit_intercept), epsilon(epsilon), intercept_(0.0) {}
 
     void fit(const Eigen::MatrixXd &X, const Eigen::VectorXd &y) {
-      coef_ = Eigen::VectorXd::Zero(X.cols());
-      intercept_ = y.mean();
+      int n_samples = X.rows();
+      int n_features = X.cols();
+      coef_ = Eigen::VectorXd::Zero(n_features);
+      intercept_ = 0.0;
+      double lr = 0.01;
+      int epochs = 1000;
+      for (int it = 0; it < epochs; ++it) {
+        for (int i = 0; i < n_samples; ++i) {
+          double pred = X.row(i).dot(coef_) + (fit_intercept ? intercept_ : 0.0);
+          double diff = pred - y[i];
+          double grad = 0.0;
+          if (diff > epsilon)
+            grad = 1.0;
+          else if (diff < -epsilon)
+            grad = -1.0;
+          if (grad != 0.0) {
+            coef_ = (1 - lr) * coef_ + lr * C * grad * X.row(i).transpose();
+            if (fit_intercept)
+              intercept_ += lr * C * grad;
+          } else {
+            coef_ = (1 - lr) * coef_;
+          }
+        }
+      }
     }
 
     Eigen::VectorXd predict(const Eigen::MatrixXd &X) const {
@@ -512,6 +551,27 @@ namespace tree {
     }
 
   private:
+    double impurity(const Eigen::VectorXi &labels) const {
+      if (labels.size() == 0) return 0.0;
+      std::map<int, int> count;
+      for (int i = 0; i < labels.size(); ++i) count[labels[i]]++;
+      double imp = 0.0;
+      if (criterion == "entropy") {
+        for (auto &p : count) {
+          double prob = (double)p.second / labels.size();
+          if (prob > 0)
+            imp -= prob * std::log(prob);
+        }
+      } else { // gini
+        imp = 1.0;
+        for (auto &p : count) {
+          double prob = (double)p.second / labels.size();
+          imp -= prob * prob;
+        }
+      }
+      return imp;
+    }
+
     TreeNode* build_tree(const Eigen::MatrixXd &X, const Eigen::VectorXi &y, int depth) {
       TreeNode* node = new TreeNode();
       bool all_same = true;
@@ -520,31 +580,77 @@ namespace tree {
       }
       if (all_same || (max_depth >= 0 && depth >= max_depth) || y.size() < min_samples_split) {
         node->is_leaf = true;
-        node->value = y.size() > 0 ? y[0] : 0;
+        std::map<int, int> count;
+        for (int i = 0; i < y.size(); ++i) count[y[i]]++;
+        int best_class = y[0];
+        int best_count = -1;
+        for (auto &p : count) {
+          if (p.second > best_count) { best_count = p.second; best_class = p.first; }
+        }
+        node->value = best_class;
         return node;
       }
-      int best_feat = 0;
-      double best_thresh = X.col(0).mean();
+
+      int n_features = X.cols();
+      double best_score = std::numeric_limits<double>::infinity();
+      int best_feat = -1;
+      double best_thresh = 0.0;
+      std::vector<int> best_left, best_right;
+      for (int f = 0; f < n_features; ++f) {
+        std::vector<double> vals(X.rows());
+        for (int i = 0; i < X.rows(); ++i) vals[i] = X(i, f);
+        std::sort(vals.begin(), vals.end());
+        vals.erase(std::unique(vals.begin(), vals.end()), vals.end());
+        for (size_t vi = 0; vi + 1 < vals.size(); ++vi) {
+          double thresh = (vals[vi] + vals[vi + 1]) / 2.0;
+          std::vector<int> left_idx, right_idx;
+          for (int i = 0; i < X.rows(); ++i) {
+            if (X(i, f) <= thresh) left_idx.push_back(i); else right_idx.push_back(i);
+          }
+          if (left_idx.empty() || right_idx.empty()) continue;
+          Eigen::VectorXi y_left(left_idx.size());
+          Eigen::VectorXi y_right(right_idx.size());
+          for (size_t i = 0; i < left_idx.size(); ++i) y_left[i] = y[left_idx[i]];
+          for (size_t i = 0; i < right_idx.size(); ++i) y_right[i] = y[right_idx[i]];
+          double score = impurity(y_left) * left_idx.size() / y.size() +
+                         impurity(y_right) * right_idx.size() / y.size();
+          if (score < best_score) {
+            best_score = score;
+            best_feat = f;
+            best_thresh = thresh;
+            best_left = left_idx;
+            best_right = right_idx;
+          }
+        }
+      }
+
+      if (best_feat == -1) {
+        node->is_leaf = true;
+        std::map<int, int> count;
+        for (int i = 0; i < y.size(); ++i) count[y[i]]++;
+        int best_class = y[0];
+        int best_count = -1;
+        for (auto &p : count) {
+          if (p.second > best_count) { best_count = p.second; best_class = p.first; }
+        }
+        node->value = best_class;
+        return node;
+      }
+
       node->feature_index = best_feat;
       node->threshold = best_thresh;
-      std::vector<int> left_idx, right_idx;
-      for (int i = 0; i < X.rows(); ++i) {
-        if (X(i, best_feat) <= best_thresh)
-          left_idx.push_back(i);
-        else
-          right_idx.push_back(i);
+
+      Eigen::MatrixXd X_left(best_left.size(), X.cols());
+      Eigen::VectorXi y_left(best_left.size());
+      for (size_t i = 0; i < best_left.size(); ++i) {
+        X_left.row(i) = X.row(best_left[i]);
+        y_left[i] = y[best_left[i]];
       }
-      Eigen::MatrixXd X_left(left_idx.size(), X.cols());
-      Eigen::VectorXi y_left(left_idx.size());
-      for (size_t i = 0; i < left_idx.size(); ++i) {
-        X_left.row(i) = X.row(left_idx[i]);
-        y_left[i] = y[left_idx[i]];
-      }
-      Eigen::MatrixXd X_right(right_idx.size(), X.cols());
-      Eigen::VectorXi y_right(right_idx.size());
-      for (size_t j = 0; j < right_idx.size(); ++j) {
-        X_right.row(j) = X.row(right_idx[j]);
-        y_right[j] = y[right_idx[j]];
+      Eigen::MatrixXd X_right(best_right.size(), X.cols());
+      Eigen::VectorXi y_right(best_right.size());
+      for (size_t i = 0; i < best_right.size(); ++i) {
+        X_right.row(i) = X.row(best_right[i]);
+        y_right[i] = y[best_right[i]];
       }
       node->left = build_tree(X_left, y_left, depth + 1);
       node->right = build_tree(X_right, y_right, depth + 1);
@@ -574,16 +680,95 @@ namespace tree {
       : criterion(criterion), max_depth(max_depth), min_samples_split(min_samples_split), root(nullptr) {}
 
     void fit(const Eigen::MatrixXd &X, const Eigen::VectorXd &y) {
-      root = new TreeNode();
-      root->is_leaf = true;
-      root->value = y.size() > 0 ? y.mean() : 0.0;
+      root = build_tree(X, y, 0);
     }
 
     Eigen::VectorXd predict(const Eigen::MatrixXd &X) const {
       Eigen::VectorXd preds = Eigen::VectorXd::Zero(X.rows());
       for (int i = 0; i < X.rows(); ++i)
-        preds[i] = root->value;
+        preds[i] = predict_sample(X.row(i), root);
       return preds;
+    }
+
+  private:
+    double mse(const Eigen::VectorXd &vals) const {
+      if (vals.size() == 0) return 0.0;
+      double mean = vals.mean();
+      return (vals.array() - mean).square().mean();
+    }
+
+    TreeNode* build_tree(const Eigen::MatrixXd &X, const Eigen::VectorXd &y, int depth) {
+      TreeNode* node = new TreeNode();
+      if ((max_depth >= 0 && depth >= max_depth) || y.size() < min_samples_split) {
+        node->is_leaf = true;
+        node->value = y.size() > 0 ? y.mean() : 0.0;
+        return node;
+      }
+
+      int n_features = X.cols();
+      double best_score = std::numeric_limits<double>::infinity();
+      int best_feat = -1;
+      double best_thresh = 0.0;
+      std::vector<int> best_left, best_right;
+      for (int f = 0; f < n_features; ++f) {
+        std::vector<double> vals(X.rows());
+        for (int i = 0; i < X.rows(); ++i) vals[i] = X(i, f);
+        std::sort(vals.begin(), vals.end());
+        vals.erase(std::unique(vals.begin(), vals.end()), vals.end());
+        for (size_t vi = 0; vi + 1 < vals.size(); ++vi) {
+          double thresh = (vals[vi] + vals[vi + 1]) / 2.0;
+          std::vector<int> left_idx, right_idx;
+          for (int i = 0; i < X.rows(); ++i) {
+            if (X(i, f) <= thresh) left_idx.push_back(i); else right_idx.push_back(i);
+          }
+          if (left_idx.empty() || right_idx.empty()) continue;
+          Eigen::VectorXd y_left(left_idx.size());
+          Eigen::VectorXd y_right(right_idx.size());
+          for (size_t i = 0; i < left_idx.size(); ++i) y_left[i] = y[left_idx[i]];
+          for (size_t i = 0; i < right_idx.size(); ++i) y_right[i] = y[right_idx[i]];
+          double score = mse(y_left) * left_idx.size() / y.size() + mse(y_right) * right_idx.size() / y.size();
+          if (score < best_score) {
+            best_score = score;
+            best_feat = f;
+            best_thresh = thresh;
+            best_left = left_idx;
+            best_right = right_idx;
+          }
+        }
+      }
+
+      if (best_feat == -1) {
+        node->is_leaf = true;
+        node->value = y.size() > 0 ? y.mean() : 0.0;
+        return node;
+      }
+
+      node->feature_index = best_feat;
+      node->threshold = best_thresh;
+      Eigen::MatrixXd X_left(best_left.size(), X.cols());
+      Eigen::VectorXd y_left(best_left.size());
+      for (size_t i = 0; i < best_left.size(); ++i) {
+        X_left.row(i) = X.row(best_left[i]);
+        y_left[i] = y[best_left[i]];
+      }
+      Eigen::MatrixXd X_right(best_right.size(), X.cols());
+      Eigen::VectorXd y_right(best_right.size());
+      for (size_t i = 0; i < best_right.size(); ++i) {
+        X_right.row(i) = X.row(best_right[i]);
+        y_right[i] = y[best_right[i]];
+      }
+      node->left = build_tree(X_left, y_left, depth + 1);
+      node->right = build_tree(X_right, y_right, depth + 1);
+      return node;
+    }
+
+    double predict_sample(const Eigen::RowVectorXd &x, TreeNode* node) const {
+      if (node->is_leaf)
+        return node->value;
+      if (x[node->feature_index] <= node->threshold)
+        return predict_sample(x, node->left);
+      else
+        return predict_sample(x, node->right);
     }
   };
 
